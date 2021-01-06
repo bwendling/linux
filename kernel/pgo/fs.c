@@ -259,7 +259,6 @@ static int prf_open(struct inode *inode, struct file *file)
 		goto out;
 	}
 
-	kfree(file->private_data);
 	file->private_data = data;
 
 out:
