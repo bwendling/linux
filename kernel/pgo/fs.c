@@ -259,9 +259,7 @@ static int prf_open(struct inode *inode, struct file *file)
 		goto out;
 	}
 
-	if (file->private_data)
-		kfree(file->private_data);
-
+	kfree(file->private_data);
 	file->private_data = data;
 
 out:
@@ -274,7 +272,7 @@ static ssize_t prf_read(struct file *file, char __user *buf, size_t count,
 {
 	struct prf_private_data *data = file->private_data;
 
-	WARN_ON(!data);
+	BUG_ON(!data);
 
 	return simple_read_from_buffer(buf, count, ppos, data->buffer,
 				       data->size);
@@ -307,16 +305,9 @@ static ssize_t reset_write(struct file *file, const char __user *addr,
 	return len;
 }
 
-static ssize_t reset_read(struct file *file, char __user *addr, size_t len,
-			      loff_t *pos)
-{
-	return 0;
-}
-
 static const struct file_operations prf_reset_fops = {
 	.owner		= THIS_MODULE,
 	.write		= reset_write,
-	.read		= reset_read,
 	.llseek		= noop_llseek,
 };
 
@@ -330,7 +321,7 @@ static int __init pgo_init(void)
 				 &prf_fops))
 		goto err_remove;
 
-	if (!debugfs_create_file("reset", 0600, directory, NULL,
+	if (!debugfs_create_file("reset", 0200, directory, NULL,
 				 &prf_reset_fops))
 		goto err_remove;
 
