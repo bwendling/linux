@@ -275,24 +275,25 @@ static int prf_open(struct inode *inode, struct file *file)
 	unsigned long flags;
 	int err;
 
-	flags = prf_lock();
-
 	data = kzalloc(sizeof(*data), GFP_KERNEL);
 	if (!data) {
 		err = -ENOMEM;
 		goto out;
 	}
 
+	flags = prf_lock();
+
 	err = prf_serialize(data);
 	if (err) {
 		kfree(data);
-		goto out;
+		goto out_unlock;
 	}
 
 	file->private_data = data;
 
-out:
+out_unlock:
 	prf_unlock(flags);
+out:
 	return err;
 }
 
