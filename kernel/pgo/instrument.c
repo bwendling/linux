@@ -16,14 +16,17 @@
  *
  */
 
+#define pr_fmt(fmt)	"pgo: " fmt
+
 #include <linux/kernel.h>
 #include <linux/export.h>
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include "pgo.h"
 
-static int current_node;
+/* Lock guarding value node access and serialization. */
 static DEFINE_SPINLOCK(pgo_lock);
+static int current_node;
 
 unsigned long prf_lock(void)
 {
@@ -39,10 +42,14 @@ void prf_unlock(unsigned long flags)
 	spin_unlock_irqrestore(&pgo_lock, flags);
 }
 
+/*
+ * Return a newly allocated profiling value node which contains the tracked
+ * value by the value profiler.
+ * Note: caller *must* hold pgo_lock.
+ */
 static struct llvm_prf_value_node *allocate_node(struct llvm_prf_data *p,
 						 u32 index, u64 value)
 {
-	/* Note: caller must hold pgo_lock */
 	if (&__llvm_prf_vnds_start[current_node + 1] >= __llvm_prf_vnds_end)
 		return NULL; /* Out of nodes */
 
@@ -56,6 +63,12 @@ static struct llvm_prf_value_node *allocate_node(struct llvm_prf_data *p,
 	return &__llvm_prf_vnds_start[current_node];
 }
 
+/*
+ * Counts the number of times a target value is seen.
+ *
+ * Records the target value for the CounterIndex if not seen before. Otherwise,
+ * increments the counter associated w/ the target value.
+ */
 void __llvm_profile_instrument_target(u64 target_value, void *data, u32 index)
 {
 	struct llvm_prf_data *p = (struct llvm_prf_data *)data;
@@ -118,6 +131,9 @@ out:
 }
 EXPORT_SYMBOL(__llvm_profile_instrument_target);
 
+/*
+ * Counts the number of times a range of targets values are seen.
+ */
 void __llvm_profile_instrument_range(u64 target_value, void *data,
 				     u32 index, s64 precise_start,
 				     s64 precise_last, s64 large_value)

@@ -19,7 +19,10 @@
 #ifndef _PGO_H
 #define _PGO_H
 
-/* Note: These internal LLVM definitions must match the compiler version */
+/*
+ * Note: These internal LLVM definitions must match the compiler version.
+ * See llvm/include/llvm/ProfileData/InstrProfData.inc in LLVM's source code.
+ */
 
 #ifdef CONFIG_64BIT
 	#define LLVM_PRF_MAGIC		\
@@ -45,12 +48,30 @@
 
 #define LLVM_PRF_VERSION		5
 #define LLVM_PRF_DATA_ALIGN		8
+#define LLVM_PRF_IPVK_FIRST		0
 #define LLVM_PRF_IPVK_LAST		1
 #define LLVM_PRF_MAX_NUM_VALS_PER_SITE	16
 
 #define LLVM_PRF_VARIANT_MASK_IR	(0x1ull << 56)
 #define LLVM_PRF_VARIANT_MASK_CSIR	(0x1ull << 57)
 
+/**
+ * struct llvm_prf_header - represents the raw profile header data structure.
+ * @magic: the magic token for the file format.
+ * @version: the version of the file format.
+ * @data_size: the number of entries in the profile data section.
+ * @padding_bytes_before_counters: the number of padding bytes before the
+ *   counters.
+ * @counters_size: the size in bytes of the LLVM profile section containing the
+ *   counters.
+ * @padding_bytes_after_counters: the number of padding bytes after the
+ *   counters.
+ * @names_size: the size in bytes of the LLVM profile section containing the
+ *   counters' names.
+ * @counters_delta: the beginning of the LLMV profile counters section.
+ * @names_delta: the beginning of the LLMV profile names section.
+ * @value_kind_last: the last profile value kind.
+ */
 struct llvm_prf_header {
 	u64 magic;
 	u64 version;
@@ -64,6 +85,16 @@ struct llvm_prf_header {
 	u64 value_kind_last;
 };
 
+/**
+ * struct llvm_prf_data - represents the per-function control structure.
+ * @name_ref: the reference to the function's name.
+ * @func_hash: the hash value of the function.
+ * @counter_ptr: a pointer to the profile counter.
+ * @function_ptr: a pointer to the function.
+ * @values: the profiling values associated with this function.
+ * @num_counters: the number of counters in the function.
+ * @num_value_sites: the number of value profile sites.
+ */
 struct llvm_prf_data {
 	const u64 name_ref;
 	const u64 func_hash;
@@ -74,34 +105,62 @@ struct llvm_prf_data {
 	const u16 num_value_sites[LLVM_PRF_IPVK_LAST + 1];
 } __aligned(LLVM_PRF_DATA_ALIGN);
 
+/**
+ * structure llvm_prf_value_node_data - represents a tracked value by the
+ *   value profiler.
+ * @value: the profiled value.
+ * @count: the number of times the value appears in the training run.
+ */
 struct llvm_prf_value_node_data {
 	u64 value;
 	u64 count;
 };
 
+/**
+ * struct llvm_prf_value_node - represents an internal data structure used by
+ *   the value profiler.
+ * @value: the value counters.
+ * @count: the counters' count.
+ * @next: the next value node.
+ */
 struct llvm_prf_value_node {
 	u64 value;
 	u64 count;
 	struct llvm_prf_value_node *next;
 };
 
+/**
+ * struct llvm_prf_value_data - represents the value profiling data in indexed
+ *   format.
+ * @total_size: the total size in bytes including this field.
+ * @num_value_kinds: the number of value profile kinds that has value profile
+ *   data.
+ */
 struct llvm_prf_value_data {
 	u32 total_size;
 	u32 num_value_kinds;
 };
 
+/**
+ * struct llvm_prf_value_record - represents the on-disk layout of the value
+ *   profile data of a particular kind for one function.
+ * @kind: the kind of the value profile record.
+ * @num_value_sites: the number of value profile sites.
+ * @site_count_array: the first element of the array that stores the number
+ *   of profiled values for each value site.
+ */
 struct llvm_prf_value_record {
 	u32 kind;
 	u32 num_value_sites;
-	u8 site_count_array[1];
+	u8 site_count_array[];
 };
 
-#define prf_get_value_record_header_size() \
+#define prf_get_value_record_header_size()		\
 	offsetof(struct llvm_prf_value_record, site_count_array)
-#define prf_get_value_record_site_count_size(sites) \
+#define prf_get_value_record_site_count_size(sites)	\
 	roundup((sites), 8)
-#define prf_get_value_record_size(sites) \
-	(prf_get_value_record_header_size() + \
+#define prf_get_value_record_size(sites)		\
+	(prf_get_value_record_header_size() +		\
 	 prf_get_value_record_site_count_size((sites)))
 
 /* Data sections */

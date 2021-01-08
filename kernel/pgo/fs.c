@@ -16,6 +16,8 @@
  *
  */
 
+#define pr_fmt(fmt)	"pgo: " fmt
+
 #include <linux/kernel.h>
 #include <linux/debugfs.h>
 #include <linux/fs.h>
@@ -31,6 +33,26 @@ struct prf_private_data {
 	unsigned long size;
 };
 
+/*
+ * Raw profile data format:
+ *
+ *	- llvm_prf_header
+ *	- __llvm_prf_data
+ *	- __llvm_prf_cnts
+ *	- __llvm_prf_names
+ *	- zero padding to 8 bytes
+ *	- for each llvm_prf_data in __llvm_prf_data:
+ *		- llvm_prf_value_data
+ *			- llvm_prf_value_record + site count array
+ *				- llvm_prf_value_node_data
+ *				...
+ *			...
+ *		...
+ */
+
+/*
+ * Fill in the raw profile header values.
+ */
 static void prf_fill_header(void **buffer)
 {
 	struct llvm_prf_header *header = *(struct llvm_prf_header **)buffer;
@@ -49,28 +71,19 @@ static void prf_fill_header(void **buffer)
 	*buffer += sizeof(*header);
 }
 
-static void prf_copy_buffer(void **buffer, void *src, unsigned long size)
+/*
+ * Copy the source into the buffer, incrementing the pointer into buffer in the
+ * process.
+ */
+static void prf_copy_to_buffer(void **buffer, void *src, unsigned long size)
 {
 	memcpy(*buffer, src, size);
 	*buffer += size;
 }
 
 /*
- * Profile data format:
- *	- llvm_prf_header
- *	- __llvm_prf_data
- *	- __llvm_prf_cnts
- *	- __llvm_prf_names
- *	- zero padding to 8 bytes
- *	- for each llvm_prf_data in __llvm_prf_data:
- *		- llvm_prf_value_data
- *			- llvm_prf_value_record + site count array
- *				- llvm_prf_value_node_data
- *				...
- *			...
- *		...
+ * The size of the profiling values for all value kinds.
  */
-
 static u32 __prf_get_value_size(struct llvm_prf_data *p, u32 *value_kinds)
 {
 	struct llvm_prf_value_node **nodes =
@@ -87,7 +100,7 @@ static u32 __prf_get_value_size(struct llvm_prf_data *p, u32 *value_kinds)
 		if (!sites)
 			continue;
 
-		/* record + site count array */
+		/* Record + site count array */
 		size += prf_get_value_record_size(sites);
 		kinds++;
 
@@ -101,7 +114,6 @@ static u32 __prf_get_value_size(struct llvm_prf_data *p, u32 *value_kinds)
 			while (site && ++count <= U8_MAX)
 				site = site->next;
 
-			/* value data */
 			size += count *
 				sizeof(struct llvm_prf_value_node_data);
 		}
@@ -109,7 +121,6 @@ static u32 __prf_get_value_size(struct llvm_prf_data *p, u32 *value_kinds)
 		s += sites;
 	}
 
-	/* header */
 	if (size)
 		size += sizeof(struct llvm_prf_value_data);
 
@@ -119,6 +130,9 @@ static u32 __prf_get_value_size(struct llvm_prf_data *p, u32 *value_kinds)
 	return size;
 }
 
+/*
+ * The total size of all profiling values.
+ */
 static u32 prf_get_value_size(void)
 {
 	u32 size = 0;
@@ -130,6 +144,9 @@ static u32 prf_get_value_size(void)
 	return size;
 }
 
+/*
+ * Serialize the profiling's value.
+ */
 static void prf_serialize_value(struct llvm_prf_data *p, void **buffer)
 {
 	struct llvm_prf_value_data header;
@@ -142,9 +159,10 @@ static void prf_serialize_value(struct llvm_prf_data *p, void **buffer)
 	header.total_size = __prf_get_value_size(p, &header.num_value_kinds);
 
 	if (!header.num_value_kinds)
-		return; /* nothing to write */
+		/* Nothing to write. */
+		return;
 
-	prf_copy_buffer(buffer, &header, sizeof(header));
+	prf_copy_to_buffer(buffer, &header, sizeof(header));
 
 	for (kind = 0; kind < ARRAY_SIZE(p->num_value_sites); kind++) {
 		struct llvm_prf_value_record *record;
@@ -154,14 +172,14 @@ static void prf_serialize_value(struct llvm_prf_data *p, void **buffer)
 		if (!sites)
 			continue;
 
-		/* record */
+		/* Profiling value record. */
 		record = *(struct llvm_prf_value_record **)buffer;
 		*buffer += prf_get_value_record_header_size();
 
 		record->kind = kind;
 		record->num_value_sites = sites;
 
-		/* site count array */
+		/* Site count array. */
 		counts = *(u8 **)buffer;
 		*buffer += prf_get_value_record_site_count_size(sites);
 
@@ -177,8 +195,8 @@ static void prf_serialize_value(struct llvm_prf_data *p, void **buffer)
 			struct llvm_prf_value_node *site = nodes[s + n];
 
 			while (site && ++count <= U8_MAX) {
-				prf_copy_buffer(buffer, site,
-				  sizeof(struct llvm_prf_value_node_data));
+				prf_copy_to_buffer(buffer, site,
+						   sizeof(struct llvm_prf_value_node_data));
 				site = site->next;
 			}
 
@@ -189,6 +207,9 @@ static void prf_serialize_value(struct llvm_prf_data *p, void **buffer)
 	}
 }
 
+/*
+ * Serialize all profiling values.
+ */
 static void prf_serialize_values(void **buffer)
 {
 	struct llvm_prf_data *p;
@@ -202,6 +223,9 @@ static inline unsigned long prf_get_padding(unsigned long size)
 	return 8 - (size % 8);
 }
 
+/*
+ * The total size needed for the profiling data.
+ */
 static unsigned long prf_buffer_size(void)
 {
 	return sizeof(struct llvm_prf_header) +
@@ -212,6 +236,9 @@ static unsigned long prf_buffer_size(void)
 			prf_get_value_size();
 }
 
+/*
+ * Serialize the profling data into a format LLVM's tools can understand.
+ */
 static int prf_serialize(struct prf_private_data *p)
 {
 	int err = 0;
@@ -228,9 +255,9 @@ static int prf_serialize(struct prf_private_data *p)
 	buffer = p->buffer;
 
 	prf_fill_header(&buffer);
-	prf_copy_buffer(&buffer, __llvm_prf_data_start,  prf_data_size());
-	prf_copy_buffer(&buffer, __llvm_prf_cnts_start,  prf_cnts_size());
-	prf_copy_buffer(&buffer, __llvm_prf_names_start, prf_names_size());
+	prf_copy_to_buffer(&buffer, __llvm_prf_data_start,  prf_data_size());
+	prf_copy_to_buffer(&buffer, __llvm_prf_cnts_start,  prf_cnts_size());
+	prf_copy_to_buffer(&buffer, __llvm_prf_names_start, prf_names_size());
 	buffer += prf_get_padding(prf_names_size());
 
 	prf_serialize_values(&buffer);
@@ -239,6 +266,9 @@ out:
 	return err;
 }
 
+/*
+ * open() implementation for PGO. Creates a copy of the profiling data set.
+ */
 static int prf_open(struct inode *inode, struct file *file)
 {
 	struct prf_private_data *data;
@@ -266,6 +296,9 @@ out:
 	return err;
 }
 
+/*
+ * read() implementation for PGO.
+ */
 static ssize_t prf_read(struct file *file, char __user *buf, size_t count,
 			loff_t *ppos)
 {
@@ -277,6 +310,9 @@ static ssize_t prf_read(struct file *file, char __user *buf, size_t count,
 				       data->size);
 }
 
+/*
+ * release() implementation for PGO. Release resources allocated by open().
+ */
 static int prf_release(struct inode *inode, struct file *file)
 {
 	struct prf_private_data *data = file->private_data;
@@ -297,10 +333,40 @@ static const struct file_operations prf_fops = {
 	.release	= prf_release
 };
 
+/*
+ * write() implementation for resetting PGO's profile data.
+ */
 static ssize_t reset_write(struct file *file, const char __user *addr,
-			       size_t len, loff_t *pos)
+			   size_t len, loff_t *pos)
 {
+	struct llvm_prf_data *data;
+
 	memset(__llvm_prf_cnts_start, 0, prf_cnts_size());
+
+	for (data = __llvm_prf_data_start; data < __llvm_prf_data_end; ++data) {
+		struct llvm_prf_value_node **vnodes;
+		u64 current_vsite_count;
+		u32 i;
+
+		if (!data->values)
+			continue;
+
+		current_vsite_count = 0;
+		vnodes = (struct llvm_prf_value_node **)data->values;
+
+		for (i = LLVM_PRF_IPVK_FIRST; i <= LLVM_PRF_IPVK_LAST; ++i)
+			current_vsite_count += data->num_value_sites[i];
+
+		for (i = 0; i < current_vsite_count; ++i) {
+			struct llvm_prf_value_node *current_vnode = vnodes[i];
+
+			while (current_vnode) {
+				current_vnode->count = 0;
+				current_vnode = current_vnode->next;
+			}
+		}
+	}
+
 	return len;
 }
 
@@ -310,6 +376,9 @@ static const struct file_operations prf_reset_fops = {
 	.llseek		= noop_llseek,
 };
 
+/*
+ * Create debugfs entries.
+ */
 static int __init pgo_init(void)
 {
 	directory = debugfs_create_dir("pgo", NULL);
@@ -327,10 +396,13 @@ static int __init pgo_init(void)
 	return 0;
 
 err_remove:
-	pr_err("init failed\n");
+	pr_err("initialization failed\n");
 	return -EIO;
 }
 
+/*
+ * Remove debufs entries.
+ */
 static void __exit pgo_exit(void)
 {
 	debugfs_remove_recursive(directory);
