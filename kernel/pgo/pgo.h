@@ -142,4 +142,6 @@ __DEFINE_PRF_SIZE(cnts);
 __DEFINE_PRF_SIZE(names);
 __DEFINE_PRF_SIZE(vnds);
 
+#undef __DEFINE_PRF_SIZE
+
 #endif /* _PGO_H */
